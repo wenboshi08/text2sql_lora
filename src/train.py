@@ -129,6 +129,7 @@ def tokenize_dataset(tokenizer, texts: List[str], max_seq_length: int):
     encs = tokenizer(texts, add_special_tokens=True, padding=False, truncation=False)
     rows: List[Dict] = []
     dropped = 0
+    no_anchor = 0
     for ids, attn in zip(encs["input_ids"], encs["attention_mask"]):
         if len(ids) > max_seq_length:
             dropped += 1
@@ -136,12 +137,17 @@ def tokenize_dataset(tokenizer, texts: List[str], max_seq_length: int):
         start = _find_suffix_end(ids, resp_ids)
         if start is None:
             # Should not happen (format always includes the assistant header); safe fallback.
+            no_anchor += 1
             labels = [-100] * len(ids)
         else:
             labels = [-100] * start + ids[start:]
         rows.append({"input_ids": ids, "attention_mask": attn, "labels": labels})
     if dropped:
         print(f"[train] dropped {dropped} over-length samples (> {max_seq_length} tokens)")
+    if no_anchor:
+        # This would mean the completion-only mask is broken (model learns nothing).
+        print(f"[train] WARNING: {no_anchor} samples have NO assistant anchor -> excluded from loss. "
+              "Check RESPONSE_TEMPLATE / tokenizer special tokens!")
     return Dataset.from_list(rows), dropped
 
 
