@@ -1,0 +1,14 @@
+# text2sql 微调项目依赖
+# M1/M2（数据 + 评测）
+datasets>=2.19
+sqlglot>=23
+transformers>=4.44
+torch>=2.2
+accelerate>=0.30
+bitsandbytes>=0.43
+gdown>=5
+openai>=1.30
+# M3（训练；unsloth 为加速项，缺失时 src/train.py 自动降级纯 PEFT。
+#    训练不依赖 trl：transformers.Trainer + 自定义 completion-only collator）
+peft>=0.12
+unsloth>=2024.11
