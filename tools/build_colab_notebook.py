@@ -26,6 +26,7 @@ sys.path.insert(0, str(ROOT))  # allow `from tools.build_text2sql_zip import ...
 ZIP_RUNTIME_FILES = [
     "data/prep.py",
     "data/download_spider_dbs.py",
+    "data/download_bird_dev_dbs.py",
     "src/__init__.py",
     "src/prompt.py",
     "src/metrics.py",
@@ -154,6 +155,9 @@ if RUN_JUDGE and not JUDGE_API_KEY:
     cells.append(md("## 7. M2 — Download Spider databases (needed for execution eval)\n\nProduces `data/spider_database/`."))
     cells.append(code("""!python -u data/download_spider_dbs.py"""))
 
+    cells.append(md("## 7b. M2 — Download BIRD dev databases (for BIRD-dev execution eval)\n\nProduces `data/bird_dev_database/` (~800MB download; sqlite DBs of the 11 BIRD dev databases)."))
+    cells.append(code("""!python -u data/download_bird_dev_dbs.py"""))
+
     cells.append(md(f"""## 8. M2 — Zero-shot baseline
 
 Scores the **un-fine-tuned** model on the held-out set (Spider validation subset,
@@ -177,14 +181,14 @@ if rc != 0:
     cells.append(md("""## 8b. M2b — (optional) baseline on BIRD dev (the hard set)
 
 BIRD dev is where fine-tuning should show **real** gains (evidence + complex
-multi-table queries). Requires M1 to have generated `bird_dev.jsonl`.
-Execution accuracy is skipped (needs the official BIRD dev DBs); EM / validity /
-semantic judge still work. Results -> `results/baseline_birddev.json`."""))
+multi-table queries). Requires M1's `bird_dev.jsonl` and M2's `data/bird_dev_database/`.
+Results -> `results/baseline_birddev.json` (includes execution accuracy)."""))
 
     cells.append(code("""import subprocess
 
 cmd = ["python", "-u", "-m", "src.baseline_eval",
        "--test-jsonl", "data/processed/bird_dev.jsonl",
+       "--db-root", "data/bird_dev_database",
        "--out", "results/baseline_birddev.json",
        "--limit", str(LIMIT_BASELINE)]
 if RUN_JUDGE:
@@ -245,6 +249,7 @@ if not SKIP_TRAIN:
     cmd = ["python", "-u", "-m", "src.eval",
            "--adapter", "outputs/lora",
            "--test-jsonl", "data/processed/bird_dev.jsonl",
+           "--db-root", "data/bird_dev_database",
            "--baseline", "results/baseline_birddev.json",
            "--out", "results/finetuned_birddev.json",
            "--comparison", "results/comparison_birddev.json",

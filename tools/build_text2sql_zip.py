@@ -23,6 +23,7 @@ OUT = ROOT / "text2sql.zip"
 RUNTIME_FILES = [
     "data/prep.py",
     "data/download_spider_dbs.py",
+    "data/download_bird_dev_dbs.py",
     "src/__init__.py",
     "src/prompt.py",
     "src/metrics.py",
