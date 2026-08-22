@@ -46,6 +46,8 @@ BIRD_SCHEMA   = "xu3kev/BIRD-SQL-data-train"             # embedded schema (CREA
 SPIDER        = "xlangai/spider"                         # question/query/db_id (train/validation)
 SPIDER_TABLES_URL = "https://zenodo.org/records/5205322/files/tables.json?download=1"
 SPIDER_TABLES_CACHE = "data/spider_tables.json"          # local cache of the official tables.json
+BIRD_DEV_URL = "https://huggingface.co/datasets/1sf/bird-sql-dev-with-schema/resolve/main/dev_with_schema.json"
+BIRD_DEV_CACHE = "data/bird_dev_with_schema.json"        # local cache of BIRD dev (question/evidence/SQL/schema)
 
 DIALECT = "sqlite"  # unified dialect: BIRD and Spider are both SQLite
 
@@ -254,6 +256,66 @@ def load_spider() -> List[dict]:
     return records
 
 
+def _download_bird_dev(cache_path: str = BIRD_DEV_CACHE) -> List[dict]:
+    """Download the BIRD dev set (with schema) and return the raw record list."""
+    path = Path(cache_path)
+    if path.exists():
+        return json.loads(path.read_text(encoding="utf-8"))
+    import urllib.request
+
+    print("[prep] downloading BIRD dev (with schema) ...")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        urllib.request.urlretrieve(BIRD_DEV_URL, str(path))
+    except Exception as e:  # noqa: BLE001
+        raise SystemExit(
+            f"[prep] failed to download BIRD dev: {e}\n"
+            f"       download it manually from {BIRD_DEV_URL} to {path}"
+        ) from e
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def load_bird_dev() -> List[dict]:
+    """BIRD dev — the HARD eval set (evidence + complex multi-table queries).
+
+    Eval-only: emitted as `bird_dev.jsonl`, never mixed into train/val/test.
+    Execution accuracy needs the official BIRD dev databases (not downloaded here);
+    EM / validity / semantic judge work without them.
+    """
+    print("[prep] loading BIRD dev ...")
+    try:
+        raw = _download_bird_dev()
+    except SystemExit as e:
+        print(f"[prep] WARNING: BIRD dev unavailable ({e}); skipping bird_dev.jsonl")
+        return []
+
+    schema_map: Dict[str, dict] = {}
+    for r in raw:
+        db_id = r.get("db_id")
+        if db_id and db_id not in schema_map:
+            schema_map[db_id] = r.get("schema")
+    ddl_map = _tables_to_ddl_map([{"db_id": db_id, **s} for db_id, s in schema_map.items()])
+
+    records: List[dict] = []
+    for i, r in enumerate(raw):
+        db_id = r.get("db_id")
+        schema = ddl_map.get(db_id, "")
+        if not schema:
+            continue
+        records.append({
+            "id": f"birddev-{db_id}-{r.get('question_id', i)}",
+            "db_id": db_id,
+            "dialect": DIALECT,
+            "schema": schema,
+            "question": (r.get("question") or "").strip(),
+            "evidence": (r.get("evidence") or "").strip(),
+            "sql": (r.get("SQL") or "").strip(),
+            "source": "bird-dev",
+        })
+    print(f"[prep] BIRD dev records: {len(records)}")
+    return records
+
+
 # --------------------------------------------------------------------------- #
 # Cleaning + dedup
 # --------------------------------------------------------------------------- #
@@ -322,8 +384,9 @@ def _overlap(a: List[dict], b: List[dict]) -> Dict[str, int]:
     return {"schema_question_overlap": pq, "full_triple_overlap": pqs}
 
 
-def split_and_write(records: List[dict], out_dir: Path) -> dict:
-    """Assemble train/val/test, write JSONL + meta, run contamination check."""
+def split_and_write(records: List[dict], out_dir: Path, bird_dev: Optional[List[dict]] = None) -> dict:
+    """Assemble train/val/test (+ optional BIRD dev eval set), write JSONL + meta,
+    run contamination check."""
     out_dir.mkdir(parents=True, exist_ok=True)
 
     bird = [r for r in records if r["source"] == "bird"]
@@ -337,6 +400,8 @@ def split_and_write(records: List[dict], out_dir: Path) -> dict:
         "val": bird_split["val"],
         "test": spider_val,  # naturally disjoint from spider_train schemas; used as held-out
     }
+    if bird_dev:
+        splits["bird_dev"] = bird_dev  # eval-only; never mixed into train/val/test
 
     for name, rows in splits.items():
         path = out_dir / f"{name}.jsonl"
@@ -349,6 +414,8 @@ def split_and_write(records: List[dict], out_dir: Path) -> dict:
         "train_vs_val": _overlap(splits["train"], splits["val"]),
         "train_vs_test": _overlap(splits["train"], splits["test"]),
     }
+    if bird_dev:
+        contamination["train_vs_bird_dev"] = _overlap(splits["train"], bird_dev)
     leak = any(v["schema_question_overlap"] > 0 for v in contamination.values())
     if leak:
         print("[prep] WARNING: cross-split (schema, question) leakage detected; check dedup/split logic!")
@@ -398,7 +465,8 @@ def main() -> None:
         records = records[: args.limit]
         print(f"[prep] --limit applied; keeping first {args.limit} records")
 
-    meta = split_and_write(records, Path(args.out_dir))
+    bird_dev = load_bird_dev()
+    meta = split_and_write(records, Path(args.out_dir), bird_dev)
     print(f"[prep] done. split sizes: {meta['counts']}")
 
 

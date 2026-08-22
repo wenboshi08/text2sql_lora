@@ -23,3 +23,4 @@ results/
 .idea/
 .vscode/
 .env
+data/bird_dev_with_schema.json

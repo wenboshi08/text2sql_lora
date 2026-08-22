@@ -11,7 +11,36 @@ from __future__ import annotations
 import os
 from typing import Dict, List, Optional
 
-JUDGE_PROMPT = """You are a SQL equivalence judge. Given a database schema, a question, a gold SQL and a candidate SQL, decide whether the candidate is semantically equivalent to the gold (both produce the same answer for the question).
+JUDGE_PROMPT = """You are a strict SQL equivalence judge. Given a database schema, a question, a gold SQL and a candidate SQL, decide whether the candidate is semantically equivalent to the gold.
+
+Definition: equivalent means the two queries produce the IDENTICAL result set (same rows, same values, order-insensitive) when executed on the schema.
+
+Rules:
+- Answer YES only if the result sets are identical.
+- Answer NO if the candidate returns different rows/values, filters differently, or would error.
+- Be strict: "close enough" is NO.
+
+Examples:
+
+Schema: CREATE TABLE t (age INTEGER, name TEXT)
+Question: how many people are older than 30
+Gold: SELECT COUNT(*) FROM t WHERE age > 30
+Candidate: SELECT COUNT(1) FROM t WHERE age > 30
+Answer: YES
+
+Schema: CREATE TABLE t (age INTEGER, name TEXT)
+Question: names of people older than 30
+Gold: SELECT name FROM t WHERE age > 30
+Candidate: SELECT name FROM t WHERE age > 20
+Answer: NO
+
+Schema: CREATE TABLE t (age INTEGER, name TEXT)
+Question: how many people are older than 30
+Gold: SELECT COUNT(*) FROM t WHERE age > 30
+Candidate: SELECT name FROM t WHERE age > 30
+Answer: NO
+
+Now judge the following:
 
 ### Database schema:
 {schema}

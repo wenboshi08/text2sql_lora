@@ -148,7 +148,7 @@ JUDGE_MODEL    = "deepseek-chat"
 if RUN_JUDGE and not JUDGE_API_KEY:
     raise ValueError("RUN_JUDGE=True but no JUDGE_API_KEY provided")"""))
 
-    cells.append(md("## 6. M1 — Data prep (download/clean/dedupe/split/contamination check)\n\nProduces `data/processed/{train,val,test}.jsonl` + `meta.json`. Progress is streamed live."))
+    cells.append(md("## 6. M1 — Data prep (download/clean/dedupe/split/contamination check)\n\nProduces `data/processed/{train,val,test}.jsonl` + **`bird_dev.jsonl`** (the hard eval set) + `meta.json`. Progress is streamed live."))
     cells.append(code("""!python -u data/prep.py"""))
 
     cells.append(md("## 7. M2 — Download Spider databases (needed for execution eval)\n\nProduces `data/spider_database/`."))
@@ -164,6 +164,28 @@ for M4 comparison)."""))
 # -u = unbuffered: loss/step lines stream live into the cell
 cmd = ["python", "-u", "-m", "src.baseline_eval",
        "--db-root", "data/spider_database",
+       "--limit", str(LIMIT_BASELINE)]
+if RUN_JUDGE:
+    cmd += ["--judge", "--judge-api-key", JUDGE_API_KEY,
+            "--judge-api-base", JUDGE_API_BASE, "--judge-model", JUDGE_MODEL]
+print("$", " ".join(cmd), flush=True)
+rc = subprocess.run(cmd).returncode
+if rc != 0:
+    print(f"command failed (exit {rc}) — scroll up for the full error")
+    raise SystemExit(rc)"""))
+
+    cells.append(md("""## 8b. M2b — (optional) baseline on BIRD dev (the hard set)
+
+BIRD dev is where fine-tuning should show **real** gains (evidence + complex
+multi-table queries). Requires M1 to have generated `bird_dev.jsonl`.
+Execution accuracy is skipped (needs the official BIRD dev DBs); EM / validity /
+semantic judge still work. Results -> `results/baseline_birddev.json`."""))
+
+    cells.append(code("""import subprocess
+
+cmd = ["python", "-u", "-m", "src.baseline_eval",
+       "--test-jsonl", "data/processed/bird_dev.jsonl",
+       "--out", "results/baseline_birddev.json",
        "--limit", str(LIMIT_BASELINE)]
 if RUN_JUDGE:
     cmd += ["--judge", "--judge-api-key", JUDGE_API_KEY,
@@ -209,6 +231,34 @@ if not SKIP_TRAIN:
         raise SystemExit(rc)
 else:
     print("SKIP_TRAIN=True; skipping eval")"""))
+
+    cells.append(md("""## 10b. M4b — (optional) fine-tuned eval on BIRD dev (the hard set)
+
+Compares `results/baseline_birddev.json` vs `results/finetuned_birddev.json`
+via `results/comparison_birddev.json`. **This is where BIRD training should
+show real gains** (evidence + complex multi-table queries), unlike the easy
+Spider-validation set."""))
+
+    cells.append(code("""import subprocess
+
+if not SKIP_TRAIN:
+    cmd = ["python", "-u", "-m", "src.eval",
+           "--adapter", "outputs/lora",
+           "--test-jsonl", "data/processed/bird_dev.jsonl",
+           "--baseline", "results/baseline_birddev.json",
+           "--out", "results/finetuned_birddev.json",
+           "--comparison", "results/comparison_birddev.json",
+           "--limit", str(LIMIT_BASELINE)]
+    if RUN_JUDGE:
+        cmd += ["--judge", "--judge-api-key", JUDGE_API_KEY,
+                "--judge-api-base", JUDGE_API_BASE, "--judge-model", JUDGE_MODEL]
+    print("$", " ".join(cmd), flush=True)
+    rc = subprocess.run(cmd).returncode
+    if rc != 0:
+        print(f"command failed (exit {rc}) — scroll up for the full error")
+        raise SystemExit(rc)
+else:
+    print("SKIP_TRAIN=True; skipping BIRD-dev eval")"""))
 
     cells.append(md("""## 11. Interpreting results
 
