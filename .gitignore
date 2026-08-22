@@ -9,6 +9,7 @@ venv/
 *.zip
 data/processed/
 data/spider_database/
+data/spider_tables.json
 data/_spider_download/
 outputs/
 results/

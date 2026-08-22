@@ -3,11 +3,11 @@
 
 Corresponds to design doc §3.3 and §8 M1.
 
-Data sources (all Hugging Face-native; no fragile raw URLs):
+Data sources:
   * BIRD  : question/evidence/SQL/db_id from `birdsql/bird23-train-filtered` (official filtered split);
             schema (CREATE TABLE DDL) joined by db_id from `xu3kev/BIRD-SQL-data-train`.
   * Spider: question/SQL/db_id from `xlangai/spider` (train + validation official splits);
-            schema joined by db_id from `SuperMax991/spider-text2sql` (compact form -> DDL).
+            schema from the official Spider `tables.json` (Zenodo; covers all train+dev DBs).
 
 Outputs (--out-dir, default data/processed/):
   * train.jsonl / val.jsonl / test.jsonl — structured records (formatted later via build_messages())
@@ -44,7 +44,8 @@ from typing import Dict, List, Optional
 BIRD_FILTERED = "birdsql/bird23-train-filtered"          # question/evidence/SQL/db_id
 BIRD_SCHEMA   = "xu3kev/BIRD-SQL-data-train"             # embedded schema (CREATE TABLE DDL)
 SPIDER        = "xlangai/spider"                         # question/query/db_id (train/validation)
-SPIDER_SCHEMA = "SuperMax991/spider-text2sql"            # embedded db_schema (compact form)
+SPIDER_TABLES_URL = "https://zenodo.org/records/5205322/files/tables.json?download=1"
+SPIDER_TABLES_CACHE = "data/spider_tables.json"          # local cache of the official tables.json
 
 DIALECT = "sqlite"  # unified dialect: BIRD and Spider are both SQLite
 
@@ -71,39 +72,54 @@ def clean_bird_schema(schema: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", schema).strip()
 
 
-def spider_schema_to_ddl(db_schema: str) -> str:
-    """Convert Spider's compact schema into CREATE TABLE DDL, matching BIRD's format.
+def _download_spider_tables(cache_path: str = SPIDER_TABLES_CACHE) -> List[dict]:
+    """Download the official Spider tables.json (cached) and return the db list."""
+    path = Path(cache_path)
+    if path.exists():
+        return json.loads(path.read_text(encoding="utf-8"))
+    import urllib.request
 
-    Input : "department: Department_ID (number), Name (text) | head: head_ID (number)"
-    Output: "CREATE TABLE department (Department_ID INTEGER, Name TEXT);
-             CREATE TABLE head (head_ID INTEGER);"
+    print("[prep] downloading official Spider tables.json ...")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        urllib.request.urlretrieve(SPIDER_TABLES_URL, str(path))
+    except Exception as e:  # noqa: BLE001
+        raise SystemExit(
+            f"[prep] failed to download Spider tables.json: {e}\n"
+            f"       download it manually from {SPIDER_TABLES_URL} to {path}"
+        ) from e
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _tables_to_ddl_map(tables: List[dict]) -> Dict[str, str]:
+    """Convert official Spider tables.json (list of db objects) to {db_id: CREATE TABLE DDL}.
+
+    Uses `*_original` names (the real DB column/table names, which match the gold
+    SQL modulo case) and double-quotes every identifier so spaces / reserved words
+    / special characters still produce parseable, executable DDL. `table_idx < 0`
+    is the "*" pseudo-column and is skipped (0-based table indices).
     """
-    if not db_schema or not db_schema.strip():
-        return ""
-    tables = []
-    for table_str in db_schema.split("|"):
-        table_str = table_str.strip()
-        if not table_str or ":" not in table_str:
-            continue
-        table_name, cols_str = table_str.split(":", 1)
-        table_name = table_name.strip()
-        cols = []
-        for col_str in cols_str.split(","):
-            col_str = col_str.strip()
-            if not col_str:
-                continue
-            m = re.match(r"^(.*?)\s*\(([^)]*)\)\s*$", col_str)
-            if m:
-                col_name, col_type = m.group(1).strip(), m.group(2).strip().lower()
-            else:
-                # Default to TEXT when no type annotation is present.
-                col_name, col_type = col_str, "TEXT"
-            col_type = _SPIDER_TYPE_MAP.get(col_type, col_type.upper())
-            cols.append(f"{col_name} {col_type}")
-        if not cols:
-            continue
-        tables.append(f"CREATE TABLE {table_name} ({', '.join(cols)});")
-    return "\n".join(tables)
+    schema_map: Dict[str, str] = {}
+    for db in tables:
+        db_id = db.get("db_id")
+        table_names = db.get("table_names_original") or []
+        columns = db.get("column_names_original") or []
+        types = db.get("column_types") or []
+
+        by_table: Dict[int, List[str]] = {}
+        for (tidx, col_name), col_type in zip(columns, types):
+            if tidx is None or tidx < 0:
+                continue  # skip "*" (table index -1)
+            sql_type = _SPIDER_TYPE_MAP.get((col_type or "").lower(), (col_type or "TEXT").upper())
+            by_table.setdefault(tidx, []).append(f'"{col_name}" {sql_type}')
+
+        ddl = []
+        for tidx, col_defs in sorted(by_table.items()):
+            tname = table_names[tidx] if tidx < len(table_names) else f"table_{tidx}"
+            ddl.append(f'CREATE TABLE "{tname}" ({", ".join(col_defs)});')
+        if ddl:
+            schema_map[db_id] = "\n".join(ddl)
+    return schema_map
 
 
 # --------------------------------------------------------------------------- #
@@ -149,11 +165,11 @@ def _load_hf(name: str, split: Optional[str] = None):
                          f"       ensure `pip install datasets` and Hugging Face access.") from e
 
 
-def _build_schema_map(name: str, key_col: str, schema_col: str, *, is_spider: bool = False) -> Dict[str, str]:
-    """Build a {db_id: schema} map from a schema-bearing mirror (one schema per db).
+def _build_schema_map(name: str, key_col: str, schema_col: str) -> Dict[str, str]:
+    """Build a {db_id: schema} map from a schema-bearing HF mirror (one schema per db).
 
-    Iterates over ALL splits of the mirror (e.g. Spider's train + test), because
-    Spider's train and dev splits use disjoint databases.
+    Iterates over ALL splits of the mirror because a schema-bearing mirror may
+    split schemas across multiple splits.
     """
     ds = _load_hf(name)
     splits = ds.values() if isinstance(ds, dict) else [ds]
@@ -166,7 +182,7 @@ def _build_schema_map(name: str, key_col: str, schema_col: str, *, is_spider: bo
             if not db_id:
                 continue
             if db_id not in schema_map:
-                schema = spider_schema_to_ddl(schema) if is_spider else clean_bird_schema(schema)
+                schema = clean_bird_schema(schema)
                 if schema:
                     schema_map[db_id] = schema
                 else:
@@ -206,10 +222,10 @@ def load_bird() -> List[dict]:
 
 
 def load_spider() -> List[dict]:
-    """Spider: train/validation splits joined with schema map."""
+    """Spider: train/validation splits joined with the official tables.json schema map."""
     print("[prep] loading Spider ...")
     ds = _load_hf(SPIDER)  # dict with keys: train, validation
-    schema_map = _build_schema_map(SPIDER_SCHEMA, key_col="db_id", schema_col="db_schema", is_spider=True)
+    schema_map = _tables_to_ddl_map(_download_spider_tables())
 
     records: List[dict] = []
     split_names = [s for s in ("train", "validation") if s in ds]
