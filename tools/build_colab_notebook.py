@@ -130,9 +130,14 @@ print("VRAM: %.1f GB" % (torch.cuda.get_device_properties(0).total_memory / 2**3
 - `RUN_JUDGE`: whether to add the independent LLM semantic judge (needs a DeepSeek/Qwen API key)."""))
 
     cells.append(code("""# 5. Configuration
+import os
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")  # reduce OOM fragmentation
+
 LIMIT_BASELINE = 50          # smoke: 50; real eval: 500 (~1-2h on T4)
 LIMIT_TRAIN    = None        # training sample cap (None = full); smoke: 200
 MAX_STEPS      = None        # early-stop steps (None = normal); smoke: 5
+BATCH_SIZE     = 1           # T4-friendly; use 2-4 on A100
+MAX_SEQ_LENGTH = 1536        # T4-friendly; use 2048 on A100 (drops fewer long schemas)
 SKIP_TRAIN     = False       # True skips M3 training (data+baseline only)
 RUN_JUDGE      = False       # whether to run the independent LLM semantic judge
 JUDGE_API_KEY  = None        # DeepSeek key (or set OPENAI_API_KEY env var)
@@ -171,7 +176,9 @@ if rc != 0:
     cells.append(code("""import subprocess
 
 if not SKIP_TRAIN:
-    cmd = ["python", "-m", "src.train"]
+    cmd = ["python", "-m", "src.train",
+           "--batch-size", str(BATCH_SIZE),
+           "--max-seq-length", str(MAX_SEQ_LENGTH)]
     if LIMIT_TRAIN: cmd += ["--limit", str(LIMIT_TRAIN)]
     if MAX_STEPS:   cmd += ["--max-steps", str(MAX_STEPS)]
     print("$", " ".join(cmd))

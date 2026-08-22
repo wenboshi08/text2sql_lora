@@ -150,22 +150,27 @@ def _load_hf(name: str, split: Optional[str] = None):
 
 
 def _build_schema_map(name: str, key_col: str, schema_col: str, *, is_spider: bool = False) -> Dict[str, str]:
-    """Build a {db_id: schema} map from a schema-bearing mirror (one schema per db)."""
+    """Build a {db_id: schema} map from a schema-bearing mirror (one schema per db).
+
+    Iterates over ALL splits of the mirror (e.g. Spider's train + test), because
+    Spider's train and dev splits use disjoint databases.
+    """
     ds = _load_hf(name)
-    split = ds["train"] if isinstance(ds, dict) and "train" in ds else ds
+    splits = ds.values() if isinstance(ds, dict) else [ds]
     schema_map: Dict[str, str] = {}
     missing = 0
-    for row in split:
-        db_id = row.get(key_col)
-        schema = row.get(schema_col) or ""
-        if not db_id:
-            continue
-        if db_id not in schema_map:
-            schema = spider_schema_to_ddl(schema) if is_spider else clean_bird_schema(schema)
-            if schema:
-                schema_map[db_id] = schema
-            else:
-                missing += 1
+    for split in splits:
+        for row in split:
+            db_id = row.get(key_col)
+            schema = row.get(schema_col) or ""
+            if not db_id:
+                continue
+            if db_id not in schema_map:
+                schema = spider_schema_to_ddl(schema) if is_spider else clean_bird_schema(schema)
+                if schema:
+                    schema_map[db_id] = schema
+                else:
+                    missing += 1
     if missing:
         print(f"[prep] {name}: {missing} db_ids have no valid schema; skipped")
     return schema_map
