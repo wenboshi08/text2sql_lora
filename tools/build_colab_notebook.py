@@ -132,6 +132,7 @@ print("VRAM: %.1f GB" % (torch.cuda.get_device_properties(0).total_memory / 2**3
     cells.append(code("""# 5. Configuration
 import os
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")  # reduce OOM fragmentation
+os.environ.setdefault("PYTHONUNBUFFERED", "1")  # stream progress lines live (no block buffering)
 
 LIMIT_BASELINE = 50          # smoke: 50; real eval: 500 (~1-2h on T4)
 LIMIT_TRAIN    = None        # training sample cap (None = full); smoke: 200
@@ -147,11 +148,11 @@ JUDGE_MODEL    = "deepseek-chat"
 if RUN_JUDGE and not JUDGE_API_KEY:
     raise ValueError("RUN_JUDGE=True but no JUDGE_API_KEY provided")"""))
 
-    cells.append(md("## 6. M1 — Data prep (download/clean/dedupe/split/contamination check)\n\nProduces `data/processed/{train,val,test}.jsonl` + `meta.json`."))
-    cells.append(code("""!python data/prep.py"""))
+    cells.append(md("## 6. M1 — Data prep (download/clean/dedupe/split/contamination check)\n\nProduces `data/processed/{train,val,test}.jsonl` + `meta.json`. Progress is streamed live."))
+    cells.append(code("""!python -u data/prep.py"""))
 
     cells.append(md("## 7. M2 — Download Spider databases (needed for execution eval)\n\nProduces `data/spider_database/`."))
-    cells.append(code("""!python data/download_spider_dbs.py"""))
+    cells.append(code("""!python -u data/download_spider_dbs.py"""))
 
     cells.append(md(f"""## 8. M2 — Zero-shot baseline
 
@@ -160,28 +161,29 @@ Scores the **un-fine-tuned** model on the held-out set (Spider validation subset
 for M4 comparison)."""))
     cells.append(code("""import subprocess
 
-cmd = ["python", "-m", "src.baseline_eval",
+# -u = unbuffered: loss/step lines stream live into the cell
+cmd = ["python", "-u", "-m", "src.baseline_eval",
        "--db-root", "data/spider_database",
        "--limit", str(LIMIT_BASELINE)]
 if RUN_JUDGE:
     cmd += ["--judge", "--judge-api-key", JUDGE_API_KEY,
             "--judge-api-base", JUDGE_API_BASE, "--judge-model", JUDGE_MODEL]
-print("$", " ".join(cmd))
+print("$", " ".join(cmd), flush=True)
 rc = subprocess.run(cmd).returncode
 if rc != 0:
     print(f"command failed (exit {rc}) — scroll up for the full error")
     raise SystemExit(rc)"""))
 
-    cells.append(md("## 9. M3 — QLoRA fine-tuning (Unsloth 4-bit + completion-only loss)\n\nProduces `outputs/lora/` (adapter + train_config.json + history.json)."))
+    cells.append(md("## 9. M3 — QLoRA fine-tuning (Unsloth 4-bit + completion-only loss)\n\nProduces `outputs/lora/` (adapter + train_config.json + history.json).\n\nLive progress: **every 10 steps** the trainer prints `loss`/`grad_norm`/`learning_rate`; eval every 100 steps prints `eval_loss`; a tqdm bar shows step/ETA."))
     cells.append(code("""import subprocess
 
 if not SKIP_TRAIN:
-    cmd = ["python", "-m", "src.train",
+    cmd = ["python", "-u", "-m", "src.train",
            "--batch-size", str(BATCH_SIZE),
            "--max-seq-length", str(MAX_SEQ_LENGTH)]
     if LIMIT_TRAIN: cmd += ["--limit", str(LIMIT_TRAIN)]
     if MAX_STEPS:   cmd += ["--max-steps", str(MAX_STEPS)]
-    print("$", " ".join(cmd))
+    print("$", " ".join(cmd), flush=True)
     rc = subprocess.run(cmd).returncode
     if rc != 0:
         print(f"command failed (exit {rc}) — scroll up for the full error")
@@ -193,14 +195,14 @@ else:
     cells.append(code("""import subprocess
 
 if not SKIP_TRAIN:
-    cmd = ["python", "-m", "src.eval",
+    cmd = ["python", "-u", "-m", "src.eval",
            "--adapter", "outputs/lora",
            "--db-root", "data/spider_database",
            "--limit", str(LIMIT_BASELINE)]
     if RUN_JUDGE:
         cmd += ["--judge", "--judge-api-key", JUDGE_API_KEY,
                 "--judge-api-base", JUDGE_API_BASE, "--judge-model", JUDGE_MODEL]
-    print("$", " ".join(cmd))
+    print("$", " ".join(cmd), flush=True)
     rc = subprocess.run(cmd).returncode
     if rc != 0:
         print(f"command failed (exit {rc}) — scroll up for the full error")

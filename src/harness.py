@@ -99,9 +99,9 @@ def run_eval(
                 "valid": metrics.sql_validity(sql),
                 "exec": metrics.execution_match(sql, gold, db_path),
             })
-            if (i + 1) % 25 == 0:
+            if (i + 1) % 10 == 0:
                 el = time.time() - t0
-                print(f"[harness] {i + 1}/{len(records)} ({el / (i + 1):.1f}s/record)")
+                print(f"[harness] {i + 1}/{len(records)} ({el / (i + 1):.1f}s/record)", flush=True)
     return results
 
 

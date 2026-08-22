@@ -96,5 +96,5 @@ def judge_batch(
         results[j] = judge_one(records[j], preds[j], api_base=api_base, model=model, api_key=api_key)
         if (i + 1) % 25 == 0:
             done = [r for r in results if r is not None]
-            print(f"[judge] {i + 1}/{len(idxs)} judged, current equiv rate {sum(done) / len(done):.3f}")
+            print(f"[judge] {i + 1}/{len(idxs)} judged, current equiv rate {sum(done) / len(done):.3f}", flush=True)
     return results
